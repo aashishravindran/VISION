@@ -1,0 +1,34 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Cache + local DBs
+cache/*.duckdb
+cache/*.duckdb.wal
+cache/*.sqlite
+cache/*.sqlite-shm
+cache/*.sqlite-wal
+
+# Generated artifacts
+charts/*.png
+
+# Frontend (Next.js)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/*.log
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.log
+*.swp

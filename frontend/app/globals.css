@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body {
+  background: #0b0d12;
+  color: #e6e9f0;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; }
+
+/* Markdown-ish prose for chat messages */
+.prose-chat h2 {
+  font-size: 1.05rem; font-weight: 600; margin: 0.75rem 0 0.25rem;
+}
+.prose-chat h3 {
+  font-size: 0.95rem; font-weight: 600; margin: 0.5rem 0 0.2rem;
+}
+.prose-chat p { margin: 0.4rem 0; line-height: 1.55; }
+.prose-chat ul, .prose-chat ol { margin: 0.4rem 0 0.4rem 1.25rem; }
+.prose-chat li { margin: 0.15rem 0; }
+.prose-chat code {
+  background: #1a1f2c; padding: 0 0.25rem; border-radius: 3px;
+  font-size: 0.85em;
+}
+.prose-chat strong { font-weight: 600; }
+.prose-chat a { color: #7aa2f7; text-decoration: underline; }
