@@ -181,16 +181,22 @@ curl -X POST http://localhost:8000/api/webhooks/inbound/trigger/<token> \
 
 ### v0.5 — Quality of life + completing what we started
 
-- [ ] **Cancel button on chat** — interrupt a running multi-agent run cleanly (today you wait it out)
+- [ ] **Price charts with indicators** — the most visibly missing thing right now. Every other AI finance tool shows charts; we don't.
+  - [ ] `/api/chart/{ticker}` — returns OHLCV + overlay/subpanel data as JSON
+  - [ ] `<Chart ticker={...}/>` component — Plotly subplots: candlesticks + SMA(20/50/200) overlay + RSI(14) subpanel + MACD subpanel; toggleable indicators
+  - [ ] `/chart/{ticker}` standalone page (e.g. `/chart/NVDA?indicators=rsi,macd`)
+  - [ ] Inline chart cards in chat — when the agent analyzes a ticker, render a small chart right in the message stream
+- [ ] **Cancel button on chat** — interrupt a running multi-agent run cleanly (today you wait it out, ~50 LOC fix)
 - [ ] **Session sidebar / history** — list past chats, click to resume; uses the existing `/api/sessions` endpoint
 - [ ] **Outbound webhook firing** — wire the scheduler + Slack/Discord/email channels for the alerts we already store
-- [ ] **Watchlists** — save tickers, surface them on a small dashboard tile (1d/1w returns, RSI flags)
+- [ ] **Watchlists** — save tickers, surface them on a small dashboard tile (1d/1w returns, RSI flags). Gives chat history a reason to exist beyond one-off queries.
 - [ ] **Screener: save & re-run filter sets** — name a filter combo, run with one click
 - [ ] **Tighter latency budget** — drop orchestrator effort on simple syntheses (`output_config: {effort: "medium"}`); aim for sub-30s typical
 - [ ] **Light pytest coverage** — Tiingo client (mocked), screener filter logic, SSE parser
 
-### v0.6 — Trust + observability
+### v0.6 — Trust + observability + visual reasoning
 
+- [ ] **Chart vision pass** — render the v0.5 chart as PNG, pass it back to GPT-5 with vision so the agent can identify *visual* patterns ("breaking out of a triangle", "head-and-shoulders forming") that pure numerical readings miss. Builds on v0.5's chart infrastructure. This is what TradingView-class platforms do well; needed to compete.
 - [ ] **Auth on the API** — bearer token or OAuth before the backend is exposed beyond localhost
 - [ ] **Citation-as-link in chat** — clickable references back to tool outputs / source URLs
 - [ ] **Confidence badges** — when data is sparse (rate-limited, tier-locked, partial), the agent says "low confidence" instead of glossing
@@ -229,3 +235,10 @@ curl -X POST http://localhost:8000/api/webhooks/inbound/trigger/<token> \
 - **Should specialists be hot-swappable?** Today they're built into the orchestrator at startup. A registry pattern would let us add/remove specialists per-user (e.g., enable crypto only for users who care).
 - **MCP re-introduction.** We dropped maverick-mcp because it added an external process. If we ever want backtesting at scale, mcp_massive's `query_data` tool is a one-shot way to add it. Worth revisiting once the core flow feels solid.
 - **Streaming sub-agents.** Right now sub-agents run to completion before returning to the orchestrator. Streaming partials would let the UI show "stock specialist is fetching fundamentals…" not just "stock specialist is running."
+
+### Features 
+
+- Whishlists 
+- Single ticker search 
+- Web Scraping search for relevant content 
+- show charts with indicators
