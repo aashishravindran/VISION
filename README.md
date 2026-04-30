@@ -176,3 +176,56 @@ curl -X POST http://localhost:8000/api/webhooks/inbound/trigger/<token> \
 - **Forward earnings dates are not on the free Tiingo tier.** The agent will tell you when asked.
 - **Outbound webhook channel firing not yet wired.** Subscriptions are stored; we'll add the scheduler + HTTP-fire later.
 - **No auth on the API.** Local dev only. Add auth before exposing.
+
+## Roadmap
+
+### v0.5 — Quality of life + completing what we started
+
+- [ ] **Cancel button on chat** — interrupt a running multi-agent run cleanly (today you wait it out)
+- [ ] **Session sidebar / history** — list past chats, click to resume; uses the existing `/api/sessions` endpoint
+- [ ] **Outbound webhook firing** — wire the scheduler + Slack/Discord/email channels for the alerts we already store
+- [ ] **Watchlists** — save tickers, surface them on a small dashboard tile (1d/1w returns, RSI flags)
+- [ ] **Screener: save & re-run filter sets** — name a filter combo, run with one click
+- [ ] **Tighter latency budget** — drop orchestrator effort on simple syntheses (`output_config: {effort: "medium"}`); aim for sub-30s typical
+- [ ] **Light pytest coverage** — Tiingo client (mocked), screener filter logic, SSE parser
+
+### v0.6 — Trust + observability
+
+- [ ] **Auth on the API** — bearer token or OAuth before the backend is exposed beyond localhost
+- [ ] **Citation-as-link in chat** — clickable references back to tool outputs / source URLs
+- [ ] **Confidence badges** — when data is sparse (rate-limited, tier-locked, partial), the agent says "low confidence" instead of glossing
+- [ ] **Re-run / pin / share a query** — bookmark a question with its result for follow-ups
+- [ ] **Cross-session memory** — durable facts: "remember that I follow energy and AI semis"
+- [ ] **Agent steerability** — user-level prompt preferences (terse vs detailed, US-only vs global)
+
+### v0.7 — Coverage gaps
+
+- [ ] **Forward earnings calendar** — paid Tiingo tier or Polygon free tier
+- [ ] **Macro dashboard** — Fed rates, CPI, employment, yield curve via FRED (free, no key needed)
+- [ ] **Crypto specialist** — reuse the architecture; Crypto.com MCP server is already on hand
+- [ ] **Options chains** — needs a different data source (mcp_massive could be re-considered here)
+- [ ] **International tickers** — Tiingo covers global but our universes are US-only; expand
+- [ ] **News deduplication** — collapse the 12 articles about the same story into one cited theme
+
+### v0.8 — Polish + trust
+
+- [ ] **Mobile-responsive layout** — chat + heat map work on phones
+- [ ] **Theme toggle** — light mode, system mode
+- [ ] **Export answers as markdown / PDF** — for sharing research
+- [ ] **Comparison views** — diff two tickers side-by-side (NVDA vs AMD)
+- [ ] **Daily/weekly automated reports** — schedule a query, email the result
+
+### v1.0 — Production posture
+
+- [ ] **Multi-user** — per-user sessions, watchlists, alerts
+- [ ] **Docker compose** — one-command spin up for backend + frontend + Redis (if added for cache)
+- [ ] **Multi-source fallback** — Tiingo → Alpha Vantage → Polygon as resilience layer
+- [ ] **CI/CD** — GitHub Actions: tests on PR, build on tag
+- [ ] **Observability** — structured logging, OpenTelemetry traces beyond OpenAI's tracing dashboard
+- [ ] **Rate-limit-aware caching** — automatic backoff with user-visible status when upstream limits hit
+
+### Open architectural questions
+
+- **Should specialists be hot-swappable?** Today they're built into the orchestrator at startup. A registry pattern would let us add/remove specialists per-user (e.g., enable crypto only for users who care).
+- **MCP re-introduction.** We dropped maverick-mcp because it added an external process. If we ever want backtesting at scale, mcp_massive's `query_data` tool is a one-shot way to add it. Worth revisiting once the core flow feels solid.
+- **Streaming sub-agents.** Right now sub-agents run to completion before returning to the orchestrator. Streaming partials would let the UI show "stock specialist is fetching fundamentals…" not just "stock specialist is running."
