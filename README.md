@@ -75,32 +75,34 @@ Multi-agent finance research system. A top-level orchestrator delegates to four 
 
 ## Setup
 
-### 1. Backend
+### 1. One-time install
 
 ```bash
 cd ~/Documents/VISION
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
+python3 -m venv .venv             # if not already
+cp .env.example .env              # then fill in OPENAI_API_KEY + TIINGO_API_KEY
+brew install node                 # if not already
+make install                      # installs Python + frontend deps
 ```
 
-Fill in `.env`:
-- `OPENAI_API_KEY` — required
-- `TIINGO_API_KEY` — sign up at https://www.tiingo.com/account/api/token (free, 500 req/day; we cache hard so this is plenty)
+Get a free Tiingo key at https://www.tiingo.com/account/api/token (500 req/day — plenty with our caching).
 
-Run the API:
+### 2. Run
+
 ```bash
-.venv/bin/uvicorn vision.api:app --reload --port 8000
+make dev          # backend (:8000) in background + frontend (:3000) in foreground
+                  # Ctrl+C stops both
+
+# Or run them separately in two terminals:
+make backend      # FastAPI auto-reload on :8000
+make frontend     # Next.js dev on :3000
 ```
 
-### 2. Frontend
-
+Other handy targets:
 ```bash
-brew install node    # if not already installed
-cd ~/Documents/VISION/frontend
-cp .env.local.example .env.local
-npm install
-npm run dev
+make stop         # kill any lingering uvicorn / next dev
+make log          # tail backend log (when started via `make dev`)
+make clean        # drop caches (SQLite, .next, __pycache__)
 ```
 
 Open http://localhost:3000.

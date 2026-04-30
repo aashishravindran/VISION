@@ -141,6 +141,33 @@ export type Heatmap = {
   items: HeatmapItem[];
 };
 
+export type HistoryItem = {
+  type?: string;
+  role?: string;
+  content?: unknown;
+  [k: string]: unknown;
+};
+
+export type SessionDetail = {
+  id: string;
+  title: string | null;
+  history: HistoryItem[];
+  created_at: string;
+  updated_at: string;
+};
+
+export async function getSession(sessionId: string): Promise<SessionDetail> {
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`);
+  if (!res.ok) {
+    throw Object.assign(new Error(`session fetch failed: ${res.status}`), { status: res.status });
+  }
+  return res.json();
+}
+
+export async function deleteSession(sessionId: string): Promise<void> {
+  await fetch(`${API_BASE}/api/sessions/${sessionId}`, { method: "DELETE" });
+}
+
 export async function getHeatmap(kind: "sector" | "sp500", topN = 100): Promise<Heatmap> {
   const url =
     kind === "sector"

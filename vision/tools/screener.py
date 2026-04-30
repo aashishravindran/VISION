@@ -3,7 +3,12 @@
 Distinct from `screen_universe` (in indicators.py), which screens a user-supplied
 ticker list on technicals only. This tool takes a universe name (sp500, nasdaq100,
 dow30) and supports fundamental filters via Tiingo's daily fundamentals endpoint.
+
+Per-ticker work runs in a thread pool — each ticker is independent and bound by
+HTTP latency, so threading turns a 5-minute serial scan into ~30 seconds.
 """
+from concurrent.futures import ThreadPoolExecutor
+
 from agents import function_tool
 
 from vision import cache
@@ -85,27 +90,49 @@ def _screen_stocks(
              or sort_by == "rsi")
     )
 
-    matches: list[dict] = []
-    skipped: list[dict] = []
-    notices: set[str] = set()  # surfaced to the response so users see *why* rows are sparse
-
+    # First pass: cheap sector filter at the universe level — Wikipedia
+    # already tells us the GICS sector, no API call needed.
+    rows_to_fetch = []
     for row in universe_rows:
-        t = row["ticker"]
-
-        # Sector filter at the universe level — Wikipedia table tells us the
-        # GICS sector, no API call needed.
         if sector is not None:
             row_sector = row.get("sector") or ""
             if not row_sector or sector.lower() not in row_sector.lower():
                 continue
+        rows_to_fetch.append(row)
 
+    # Second pass: parallel per-ticker fetch (fundamentals + indicators if needed)
+    def _fetch_one(row: dict) -> tuple[dict, dict | None, dict | None, str | None]:
+        """Returns (universe_row, fundamentals_or_None, indicators_or_None, error_or_None)."""
+        t = row["ticker"]
         try:
             f = _get_quick_fundamentals(t)
         except Exception as e:
-            skipped.append({"ticker": t, "error": str(e)})
+            return (row, None, None, str(e))
+        ind = None
+        if needs_technicals:
+            try:
+                ind = _compute_indicators(t, lookback_days=365)
+            except Exception as e:
+                return (row, f, None, f"indicators: {e}")
+        return (row, f, ind, None)
+
+    matches: list[dict] = []
+    skipped: list[dict] = []
+    notices: set[str] = set()
+
+    # Thread-pool — each ticker is independent, bound by HTTP latency. With 16
+    # workers the S&P 500 fetches in ~30s (vs ~5min serial).
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        results = list(pool.map(_fetch_one, rows_to_fetch))
+
+    # Third pass: apply filters serially over the materialized results
+    for row, f, ind, err in results:
+        t = row["ticker"]
+        if err and f is None:
+            skipped.append({"ticker": t, "error": err})
             continue
 
-        # Note any data-source limitations seen
+        f = f or {}
         fstatus = f.get("fundamentals_status")
         if fstatus == "tier_limited":
             notices.add(
@@ -127,17 +154,12 @@ def _screen_stocks(
             continue
 
         record = dict(f)
-        # Backfill name/sector/industry from the universe row (they're not in
-        # the per-ticker Tiingo fundamentals payload)
         record["name"] = row.get("name") or record.get("name")
         record["sector"] = row.get("sector") or record.get("sector")
         record["industry"] = row.get("industry") or record.get("industry")
 
         if needs_technicals:
-            try:
-                ind = _compute_indicators(t, lookback_days=365)
-            except Exception as e:
-                skipped.append({"ticker": t, "error": f"indicators: {e}"})
+            if ind is None:
                 continue
             if "error" in ind:
                 continue
@@ -168,7 +190,8 @@ def _screen_stocks(
 
     return {
         "universe": universe_label,
-        "n_screened": len(universe_rows),
+        "n_screened": len(rows_to_fetch),
+        "n_universe": len(universe_rows),
         "n_matches": len(matches),
         "n_returned": min(len(matches), limit),
         "filters": {

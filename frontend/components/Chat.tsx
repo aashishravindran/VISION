@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { streamChat } from "@/lib/api";
+import { deleteSession, getSession, streamChat, type HistoryItem } from "@/lib/api";
+
+const SESSION_KEY = "vision_session_id";
 
 type ToolStatus = "running" | "done" | "error";
 type ToolEvent = {
@@ -173,16 +175,81 @@ function HeroEmptyState({ onPick }: { onPick: (q: string) => void }) {
   );
 }
 
+/** Parse the openai-agents `to_input_list()` history into the simple
+ * user/assistant messages our UI renders. We only show user turns and the
+ * final assistant text — internal reasoning and tool calls are dropped (they
+ * already happened; the chip stream for them is gone). */
+function parseHistory(history: HistoryItem[]): Msg[] {
+  const out: Msg[] = [];
+  for (const item of history || []) {
+    // User turn — content is a plain string in our flow
+    if (item.role === "user" && typeof item.content === "string") {
+      out.push({ role: "user", content: item.content, tools: [], thinking: false });
+      continue;
+    }
+    // Assistant message turn — content is a list of output blocks
+    if (item.type === "message" && item.role === "assistant" && Array.isArray(item.content)) {
+      const text = item.content
+        .map((c) => {
+          const obj = c as { type?: string; text?: string };
+          return obj.type === "output_text" && typeof obj.text === "string" ? obj.text : "";
+        })
+        .join("");
+      if (text) {
+        out.push({ role: "assistant", content: text, tools: [], thinking: false });
+      }
+    }
+    // Skip reasoning / function_call / function_call_output items
+  }
+  return out;
+}
+
 export default function Chat() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Restore session on mount — survives navigation between /chat /screener /heatmap
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = localStorage.getItem(SESSION_KEY);
+    if (!saved) return;
+    setRestoring(true);
+    getSession(saved)
+      .then((s) => {
+        setSessionId(s.id);
+        setMessages(parseHistory(s.history));
+      })
+      .catch(() => {
+        // Session expired or backend reset — clear stale ID
+        localStorage.removeItem(SESSION_KEY);
+      })
+      .finally(() => setRestoring(false));
+  }, []);
+
+  // Persist sessionId changes
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (sessionId) localStorage.setItem(SESSION_KEY, sessionId);
+  }, [sessionId]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
+
+  async function newChat() {
+    if (busy) return;
+    if (sessionId) {
+      // Best-effort delete — don't block on it
+      deleteSession(sessionId).catch(() => {});
+    }
+    setMessages([]);
+    setSessionId(null);
+    if (typeof window !== "undefined") localStorage.removeItem(SESSION_KEY);
+  }
 
   async function send(text?: string) {
     const t = (text ?? input).trim();
@@ -272,7 +339,12 @@ export default function Chat() {
   return (
     <div className="flex flex-col h-[calc(100vh-130px)]">
       <div ref={scrollRef} className="flex-1 overflow-y-auto pr-2 space-y-4">
-        {messages.length === 0 ? (
+        {restoring ? (
+          <div className="text-muted text-sm flex items-center gap-2 py-8 justify-center">
+            <span className="inline-block w-3 h-3 rounded-full border-2 border-accent border-t-transparent animate-spin" />
+            Restoring session…
+          </div>
+        ) : messages.length === 0 ? (
           <HeroEmptyState onPick={(q) => send(q)} />
         ) : (
           messages.map((m, i) => (
@@ -324,9 +396,18 @@ export default function Chat() {
           {busy ? "…" : "Send"}
         </button>
       </div>
-      {sessionId && (
-        <div className="mt-2 text-[11px] text-muted font-mono">session: {sessionId}</div>
-      )}
+      <div className="mt-2 flex items-center justify-between text-[11px] text-muted">
+        <span className="font-mono">{sessionId ? `session: ${sessionId}` : "no active session"}</span>
+        {(sessionId || messages.length > 0) && (
+          <button
+            onClick={newChat}
+            disabled={busy}
+            className="hover:text-accent transition-colors disabled:opacity-50"
+          >
+            New chat ↻
+          </button>
+        )}
+      </div>
     </div>
   );
 }
