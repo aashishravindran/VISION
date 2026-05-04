@@ -1,18 +1,22 @@
-"""Real stock screener — filter a named universe by technical and fundamental criteria.
+"""Real stock screener — filter a stock universe by technical and fundamental criteria.
 
-Distinct from `screen_universe` (in indicators.py), which screens a user-supplied
-ticker list on technicals only. This tool takes a universe name (sp500, nasdaq100,
-dow30) and supports fundamental filters via Tiingo's daily fundamentals endpoint.
+Two strategies:
+1. **FMP fast path** — when FMP_API_KEY is set, hand the fundamental filters
+   (market cap, P/E, sector) to FMP's `/stock-screener` endpoint and let it
+   filter server-side in ONE request. Massive cost reduction vs per-ticker.
+2. **Tiingo fallback path** — per-ticker fetches from Tiingo, parallelized
+   via a thread pool. Hits Tiingo's tier-limit on non-Dow names, but works
+   with whatever data we can get.
 
-Per-ticker work runs in a thread pool — each ticker is independent and bound by
-HTTP latency, so threading turns a 5-minute serial scan into ~30 seconds.
+Technical filters (RSI, SMA trend) are always computed locally from Tiingo
+prices — neither FMP free nor Tiingo offer pre-computed RSI in batch.
 """
 from concurrent.futures import ThreadPoolExecutor
 
 from agents import function_tool
 
 from vision import cache
-from vision.data import tiingo
+from vision.data import fmp, tiingo
 from vision.tools.indicators import _compute_indicators
 from vision.tools.universes import get_universe
 
@@ -55,6 +59,63 @@ def _get_quick_fundamentals(ticker: str) -> dict:
     return out
 
 
+def _try_fmp_screen(
+    *,
+    sector: str | None,
+    market_cap_min: float | None,
+    market_cap_max: float | None,
+    pe_min: float | None,
+    pe_max: float | None,
+    universe_filter: list[str] | None,
+    limit: int,
+) -> tuple[list[dict] | None, str | None]:
+    """Attempt FMP server-side screen. Returns (rows, source_label) on success,
+    (None, error_reason) on any failure so caller can fall back to Tiingo."""
+    try:
+        rows = fmp.screen(
+            market_cap_min=market_cap_min,
+            market_cap_max=market_cap_max,
+            pe_min=pe_min,
+            pe_max=pe_max,
+            sector=sector,
+            limit=max(limit * 2, 100),  # over-fetch for technicals filter
+        )
+    except fmp.FMPNoKeyError:
+        return None, "no_key"
+    except fmp.FMPRateLimitError:
+        return None, "rate_limited"
+    except fmp.FMPError as e:
+        return None, f"error: {e}"
+
+    # Translate FMP's response shape to our internal record shape
+    out: list[dict] = []
+    universe_filter_set = (
+        {t.upper() for t in universe_filter} if universe_filter else None
+    )
+    for r in rows:
+        sym = (r.get("symbol") or "").upper()
+        if not sym:
+            continue
+        if universe_filter_set and sym not in universe_filter_set:
+            continue
+        out.append({
+            "ticker": sym,
+            "name": r.get("companyName"),
+            "sector": r.get("sector"),
+            "industry": r.get("industry"),
+            "market_cap": r.get("marketCap"),
+            "pe": None,  # FMP screener doesn't return P/E directly; we'd need a quote join
+            "pb": None,
+            "peg_1y": None,
+            "price": r.get("price"),
+            "beta": r.get("beta"),
+            "volume": r.get("volume"),
+            "exchange": r.get("exchangeShortName") or r.get("exchange"),
+            "_source": "fmp",
+        })
+    return out, "fmp"
+
+
 def _screen_stocks(
     universe: str = "sp500",
     tickers: list[str] | None = None,
@@ -89,7 +150,70 @@ def _screen_stocks(
              or above_sma_50 is not None or above_sma_200 is not None
              or sort_by == "rsi")
     )
+    notices: set[str] = set()
 
+    # === FMP fast path ===
+    # If FMP is configured, skip the per-ticker Tiingo loop entirely. FMP
+    # handles sector/marketcap/PE filtering server-side; we still need
+    # Tiingo for technicals if requested.
+    universe_filter = (
+        [r["ticker"] for r in universe_rows]
+        if not tickers and universe in ("sp500", "nasdaq100", "dow30")
+        else None
+    )
+    fmp_rows, fmp_status = _try_fmp_screen(
+        sector=sector,
+        market_cap_min=market_cap_min,
+        market_cap_max=market_cap_max,
+        pe_min=pe_min,
+        pe_max=pe_max,
+        universe_filter=universe_filter,
+        limit=limit,
+    )
+
+    if fmp_rows is not None:
+        # FMP handled fundamentals. Optionally enrich with technicals from Tiingo.
+        if not needs_technicals:
+            fmp_rows.sort(
+                key=lambda m: (m.get("market_cap") is None, -(m.get("market_cap") or 0))
+                if sort_by == "market_cap"
+                else (m.get(sort_by) is None, -(m.get(sort_by) or 0))
+            )
+            return {
+                "universe": universe_label,
+                "n_screened": len(fmp_rows),
+                "n_universe": len(universe_rows) if not tickers else len(tickers),
+                "n_matches": len(fmp_rows),
+                "n_returned": min(len(fmp_rows), limit),
+                "filters": _filter_dict(sector, market_cap_min, market_cap_max, pe_min, pe_max,
+                                         rsi_min, rsi_max, above_sma_50, above_sma_200),
+                "sort_by": sort_by,
+                "matches": fmp_rows[:limit],
+                "skipped_count": 0,
+                "notices": [],
+                "sources_used": ["fmp"],
+            }
+
+        # Need technicals — fetch indicators for the ~50-200 names FMP returned
+        return _enrich_with_technicals(
+            fmp_rows, rsi_min=rsi_min, rsi_max=rsi_max,
+            above_sma_50=above_sma_50, above_sma_200=above_sma_200,
+            sort_by=sort_by, limit=limit, universe_label=universe_label,
+            n_universe=len(universe_rows) if not tickers else len(tickers),
+            notices=notices, sources_used=["fmp", "tiingo"],
+            filters=_filter_dict(sector, market_cap_min, market_cap_max, pe_min, pe_max,
+                                  rsi_min, rsi_max, above_sma_50, above_sma_200),
+        )
+
+    # FMP unavailable — note why and continue to Tiingo fallback
+    if fmp_status == "no_key":
+        pass  # silent — FMP just isn't configured
+    elif fmp_status == "rate_limited":
+        notices.add("FMP daily quota exhausted (250/day). Falling back to Tiingo per-ticker.")
+    elif fmp_status:
+        notices.add(f"FMP unavailable ({fmp_status}). Falling back to Tiingo per-ticker.")
+
+    # === Tiingo fallback path ===
     # First pass: cheap sector filter at the universe level — Wikipedia
     # already tells us the GICS sector, no API call needed.
     rows_to_fetch = []
@@ -118,7 +242,7 @@ def _screen_stocks(
 
     matches: list[dict] = []
     skipped: list[dict] = []
-    notices: set[str] = set()
+    # `notices` already exists from the FMP fast-path block above; reuse it.
 
     # Thread-pool — each ticker is independent, bound by HTTP latency. With 16
     # workers the S&P 500 fetches in ~30s (vs ~5min serial).
@@ -209,6 +333,89 @@ def _screen_stocks(
         "matches": matches[:limit],
         "skipped_count": len(skipped),
         "notices": sorted(notices),
+        "sources_used": ["tiingo"],
+    }
+
+
+def _filter_dict(sector, mcm, mcx, pem, pex, rsim, rsix, sma50, sma200) -> dict:
+    """Stable filters block for the response. Same shape regardless of path."""
+    return {
+        "sector": sector,
+        "market_cap_min": mcm,
+        "market_cap_max": mcx,
+        "pe_min": pem,
+        "pe_max": pex,
+        "rsi_min": rsim,
+        "rsi_max": rsix,
+        "above_sma_50": sma50,
+        "above_sma_200": sma200,
+    }
+
+
+def _enrich_with_technicals(
+    rows: list[dict],
+    *,
+    rsi_min: float | None,
+    rsi_max: float | None,
+    above_sma_50: bool | None,
+    above_sma_200: bool | None,
+    sort_by: str,
+    limit: int,
+    universe_label: str,
+    n_universe: int,
+    notices: set[str],
+    sources_used: list[str],
+    filters: dict,
+) -> dict:
+    """Enrich FMP-screened rows with Tiingo-computed technicals (RSI, SMA flags),
+    apply technical filters, sort, and shape the final response."""
+    def _ind_for(row: dict) -> tuple[dict, dict | None]:
+        try:
+            ind = _compute_indicators(row["ticker"], lookback_days=365)
+            return (row, ind)
+        except Exception:
+            return (row, None)
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        results = list(pool.map(_ind_for, rows))
+
+    matches: list[dict] = []
+    for row, ind in results:
+        if ind is None or "error" in ind:
+            continue
+        rsi = ind.get("rsi_14")
+        if rsi_min is not None and (rsi is None or rsi < rsi_min):
+            continue
+        if rsi_max is not None and (rsi is None or rsi > rsi_max):
+            continue
+        if above_sma_50 is True and not ind["trend"]["above_sma_50"]:
+            continue
+        if above_sma_200 is True and not ind["trend"]["above_sma_200"]:
+            continue
+        record = dict(row)
+        record["rsi_14"] = rsi
+        record["above_sma_50"] = ind["trend"]["above_sma_50"]
+        record["above_sma_200"] = ind["trend"]["above_sma_200"]
+        matches.append(record)
+
+    sort_key_map = {"market_cap": ("market_cap", True), "pe": ("pe", False), "rsi": ("rsi_14", False)}
+    sort_key, descending = sort_key_map.get(sort_by, ("market_cap", True))
+    matches.sort(
+        key=lambda m: (m.get(sort_key) is None, -(m.get(sort_key) or 0) if descending else (m.get(sort_key) or 0))
+    )
+
+    return {
+        "universe": universe_label,
+        "n_screened": len(rows),
+        "n_universe": n_universe,
+        "n_matches": len(matches),
+        "n_returned": min(len(matches), limit),
+        "filters": filters,
+        "sort_by": sort_by,
+        "matches": matches[:limit],
+        "skipped_count": 0,
+        "notices": sorted(notices),
+        "sources_used": sources_used,
     }
 
 

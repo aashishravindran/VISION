@@ -80,12 +80,14 @@ Multi-agent finance research system. A top-level orchestrator delegates to four 
 ```bash
 cd ~/Documents/VISION
 python3 -m venv .venv             # if not already
-cp .env.example .env              # then fill in OPENAI_API_KEY + TIINGO_API_KEY
+cp .env.example .env              # fill in OPENAI_API_KEY, TIINGO_API_KEY, optionally FMP_API_KEY
 brew install node                 # if not already
 make install                      # installs Python + frontend deps
 ```
 
-Get a free Tiingo key at https://www.tiingo.com/account/api/token (500 req/day — plenty with our caching).
+API keys (all free):
+- **Tiingo** — required. https://www.tiingo.com/account/api/token (~500 req/day)
+- **FMP** — optional but recommended. https://site.financialmodelingprep.com/developer/docs (250 req/day). When set, the screener uses FMP's server-side `/stock-screener` — one API call instead of 50-500 per-ticker Tiingo calls. Falls back to Tiingo if not set or rate-limited.
 
 ### 2. Run
 

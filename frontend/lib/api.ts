@@ -94,6 +94,7 @@ export type ScreenResult = {
   filters: Record<string, unknown>;
   sort_by: string;
   notices?: string[];
+  sources_used?: string[];
   matches: Array<{
     ticker: string;
     name: string | null;
@@ -109,6 +110,7 @@ export type ScreenResult = {
     above_sma_200?: boolean | null;
     fundamentals_status?: string | null;
     fundamentals_message?: string | null;
+    _source?: string;
   }>;
 };
 

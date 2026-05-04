@@ -241,11 +241,18 @@ export default function Screener() {
 
       {result && (
         <div>
-          <div className="text-sm text-muted mb-2">
-            Universe: <span className="text-foreground font-mono">{result.universe}</span>
-            {" · "}Screened {result.n_screened}
-            {" · "}Matches {result.n_matches}
-            {" · "}Showing {result.n_returned}
+          <div className="text-sm text-muted mb-2 flex items-center gap-3 flex-wrap">
+            <span>
+              Universe: <span className="text-foreground font-mono">{result.universe}</span>
+              {" · "}Screened {result.n_screened}
+              {" · "}Matches {result.n_matches}
+              {" · "}Showing {result.n_returned}
+            </span>
+            {result.sources_used && result.sources_used.length > 0 && (
+              <span className="text-[11px] font-mono text-accent/80">
+                via {result.sources_used.join(" + ")}
+              </span>
+            )}
           </div>
           {result.notices && result.notices.length > 0 && (
             <div className="mb-3 space-y-1">
