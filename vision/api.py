@@ -83,6 +83,7 @@ class ScreenRequest(BaseModel):
     universe: str = "sp500"
     tickers: list[str] | None = None
     sector: str | None = None
+    industry: str | None = None
     market_cap_min: float | None = None
     market_cap_max: float | None = None
     pe_min: float | None = None

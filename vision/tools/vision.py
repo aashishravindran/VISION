@@ -72,7 +72,7 @@ def analyze_chart_visually(ticker: str, lookback_days: int = 252) -> dict:
     if png is None:
         return {
             "ticker": ticker.upper(),
-            "error": "Could not render chart — no price data from Tiingo for this ticker.",
+            "error": "Could not render chart — no price data available for this ticker.",
         }
 
     client = OpenAI()

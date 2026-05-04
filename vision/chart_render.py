@@ -21,7 +21,7 @@ from ta.momentum import RSIIndicator
 from ta.trend import SMAIndicator
 
 from vision import cache
-from vision.data import tiingo
+from vision.data import fmp
 
 
 def render_chart_png(ticker: str, lookback_days: int = 252) -> bytes | None:
@@ -36,7 +36,10 @@ def render_chart_png(ticker: str, lookback_days: int = 252) -> bytes | None:
         if b64:
             return base64.b64decode(b64)
 
-    rows = tiingo.get_price_history(ticker, lookback_days)
+    try:
+        rows = fmp.historical_prices(ticker, lookback_days)
+    except fmp.FMPError:
+        return None
     if not rows:
         return None
 

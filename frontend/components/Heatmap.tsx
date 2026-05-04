@@ -22,9 +22,9 @@ export default function Heatmap() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Sector heatmap is cheap (11 ETFs) — auto-load. S&P 500 is expensive
-  // (~600 Tiingo requests cold) — require explicit click to avoid burning
-  // through the daily quota on incidental page loads.
+  // Sector heatmap is cheap (1 batch FMP call). S&P 500 is heavier (1 list
+  // call + 1-5 batch quote calls); we still gate it behind an explicit Load
+  // click so incidental page navigations don't burn the daily quota.
   useEffect(() => {
     if (kind === "sp500") {
       setData(null);
@@ -134,7 +134,7 @@ export default function Heatmap() {
       {loading && <div className="text-muted text-sm">Loading… (S&amp;P 500 first run can take ~60s while market caps cache)</div>}
       {!loading && kind === "sp500" && !data && (
         <div className="text-muted text-sm py-3 px-4 rounded border border-border bg-panel">
-          S&amp;P 500 heat map fetches ~600 Tiingo prices/market-caps on a cold cache.
+          S&amp;P 500 heat map fetches the full constituent list + quotes via FMP (~5 API calls cold).
           Click <strong>Load</strong> to fetch — re-runs within 4h are instant from cache.
         </div>
       )}

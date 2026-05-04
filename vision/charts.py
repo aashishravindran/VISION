@@ -14,8 +14,7 @@ from ta.trend import EMAIndicator, MACD, SMAIndicator
 from ta.volatility import BollingerBands
 
 from vision import cache
-from vision.data import tiingo
-from vision.data.tiingo import TiingoRateLimitError, TiingoTierLimitError
+from vision.data import fmp
 
 
 def _to_series_floats(s: pd.Series) -> list[float | None]:
@@ -68,29 +67,19 @@ def get_chart(ticker: str, lookback_days: int = 365, indicators: list[str] | Non
     if cached is not None:
         return cached
 
-    # Use the raw fetcher so we can distinguish "no data" from "rate-limited".
     try:
-        rows = tiingo._fetch_prices(ticker, lookback_days) or []
-        rate_limited = False
-    except TiingoRateLimitError:
-        rows = []
-        rate_limited = True
-    except TiingoTierLimitError as e:
-        return {"ticker": ticker.upper(), "error": "tier_limited", "error_message": str(e)}
-    except Exception as e:
+        rows = fmp.historical_prices(ticker, lookback_days)
+    except fmp.FMPNoKeyError:
+        return {"ticker": ticker.upper(), "error": "fetch_failed",
+                "error_message": "FMP_API_KEY not set on the server."}
+    except fmp.FMPRateLimitError as e:
+        return {"ticker": ticker.upper(), "error": "rate_limited", "error_message": str(e)}
+    except fmp.FMPError as e:
         return {"ticker": ticker.upper(), "error": "fetch_failed", "error_message": str(e)}
 
     if not rows:
-        if rate_limited:
-            return {
-                "ticker": ticker.upper(),
-                "error": "rate_limited",
-                "error_message": (
-                    "Tiingo daily request limit reached. Resets at 00:00 UTC. "
-                    "Cached charts you've viewed today still load."
-                ),
-            }
-        return {"ticker": ticker.upper(), "error": "no_data", "error_message": "No price data from Tiingo for this ticker."}
+        return {"ticker": ticker.upper(), "error": "no_data",
+                "error_message": "No price data from FMP for this ticker."}
 
     df = pd.DataFrame([
         {

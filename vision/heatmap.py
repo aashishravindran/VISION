@@ -1,117 +1,117 @@
-"""Heat map data builders. Returns JSON the frontend renders as a Plotly treemap.
+"""Heat map data builders backed by FMP.
 
-Uses Tiingo for both prices and market caps (Stooq's free CSV API was closed off).
-yfinance is no longer on this path — Yahoo's crumb invalidation made it unreliable
-for bulk operations.
+Major win over the Tiingo era: heat-map data now requires only 1-2 batch FMP
+calls instead of 600+ per-ticker calls. We use FMP's batch_quote which returns
+price + market cap + change in one shot for up to 100 tickers per chunk.
 
-Free tier note: Tiingo allows 500 requests/day. The sector heat map needs 11
-requests; the S&P 500 heat map needs ~500-600 (top-N selection + prices). Heat
-maps are cached for 4h, so a 2-3x daily refresh stays well within limits.
+Two heatmaps:
+- sector: 11 SPDR sector ETFs (1 batch_quote call)
+- sp500: top N S&P 500 names by market cap (constituents + 1-5 batch_quote calls)
 """
 from datetime import datetime
 
 from vision import cache
 from vision.config import SECTOR_ETFS
-from vision.data import tiingo
-from vision.tools.universes import get_universe
+from vision.data import fmp
 
 
 def get_sector_heatmap() -> dict:
-    """Sector heat map: 11 SPDR sector ETFs from Tiingo."""
-    cached = cache.get("get_sector_heatmap_v3", {}, ttl_hours=4)
+    """Sector heat map — 11 SPDR sector ETFs in 1 batch FMP call."""
+    cached = cache.get("get_sector_heatmap_v4", {}, ttl_hours=4)
     if cached is not None:
         return cached
 
-    summaries = tiingo.get_price_summaries_batch(SECTOR_ETFS.keys(), lookback_days=60)
+    tickers = list(SECTOR_ETFS.keys())
+    try:
+        quotes = fmp.batch_quote(tickers)
+    except fmp.FMPError as e:
+        return {"kind": "sector", "items": [], "error": str(e)}
 
+    by_symbol = {q.get("symbol"): q for q in quotes}
     items = []
     for ticker, name in SECTOR_ETFS.items():
-        s = summaries.get(ticker.upper())
-        if s is None:
-            continue
+        q = by_symbol.get(ticker, {})
+        price = q.get("price")
         items.append({
             "ticker": ticker,
             "label": name,
-            "value": 1,  # equal-weighted
-            "price": s.last_close,
-            "ret_1d": s.ret_1d_pct,
-            "ret_1w": s.ret_1w_pct,
-            "ret_1m": s.ret_1m_pct,
-            "as_of": s.as_of,
+            "value": 1,
+            "price": price,
+            "ret_1d": q.get("changePercentage"),
+            "ret_1w": _approx_pct(price, q.get("priceAvg50"), days=5),  # rough
+            "ret_1m": _approx_pct(price, q.get("priceAvg50")),
         })
 
     out = {
         "kind": "sector",
         "as_of": datetime.utcnow().date().isoformat(),
-        "source": "Tiingo (EOD)",
+        "source": "FMP /quote (batch)",
         "items": items,
     }
-    cache.put("get_sector_heatmap_v3", {}, out)
+    cache.put("get_sector_heatmap_v4", {}, out)
     return out
 
 
-def get_sp500_heatmap(top_n: int = 100) -> dict:
-    """S&P 500 heat map: top N names by market cap, grouped by GICS sector.
+def _approx_pct(curr: float | None, base: float | None, days: int | None = None) -> float | None:
+    """Compute rough percent change from current vs a baseline. Used for
+    quick approximations on the heat map (the more precise number lives in
+    individual chart endpoints)."""
+    if curr is None or base is None or base == 0:
+        return None
+    return round((curr / base - 1) * 100, 2)
 
-    Both market caps and prices come from Tiingo. First run with cold cache:
-    ~30s for market caps + ~30s for prices. Re-runs (within 4h cache TTL): < 1s.
+
+def get_sp500_heatmap(top_n: int = 100) -> dict:
+    """S&P 500 heat map — top N by market cap, grouped by GICS sector.
+
+    Cost: 1 constituents call (cached 7d) + ceil(N/100) batch_quote calls.
+    For N=100: 2 calls cold, 0 calls warm. For N=200: 3 calls cold.
     """
     params = {"top_n": top_n}
-    cached = cache.get("get_sp500_heatmap_v3", params, ttl_hours=4)
+    cached = cache.get("get_sp500_heatmap_v4", params, ttl_hours=4)
     if cached is not None:
         return cached
 
-    universe = get_universe("sp500")
-    sector_by_ticker = {u["ticker"]: u.get("sector") or "" for u in universe}
-    name_by_ticker = {u["ticker"]: u.get("name") or u["ticker"] for u in universe}
+    try:
+        constituents = fmp.constituents("sp500")
+    except fmp.FMPError as e:
+        return {"kind": "sp500", "items": [], "error": str(e)}
 
-    tickers = [u["ticker"] for u in universe]
+    sector_by_ticker = {c["symbol"]: c.get("sector") or "Other" for c in constituents}
+    name_by_ticker = {c["symbol"]: c.get("name") or c["symbol"] for c in constituents}
+    all_tickers = [c["symbol"] for c in constituents]
 
-    # Step 1: market caps via Tiingo (parallel, cached 3 days)
-    market_caps = tiingo.get_market_caps_batch(tickers)
+    try:
+        quotes = fmp.batch_quote(all_tickers)
+    except fmp.FMPError as e:
+        return {"kind": "sp500", "items": [], "error": str(e)}
 
-    # Step 2: pick top N by market cap
+    # Rank by market cap, take top N
     ranked = sorted(
-        ((t, mc) for t, mc in market_caps.items() if mc),
-        key=lambda kv: kv[1],
+        ((q.get("symbol"), q) for q in quotes if q.get("marketCap")),
+        key=lambda kv: kv[1].get("marketCap") or 0,
         reverse=True,
     )[:top_n]
-    top_tickers = [t for t, _ in ranked]
-
-    if not top_tickers:
-        return {
-            "kind": "sp500",
-            "top_n": top_n,
-            "as_of": datetime.utcnow().date().isoformat(),
-            "items": [],
-            "error": "No market caps available — check TIINGO_API_KEY",
-        }
-
-    # Step 3: returns via Tiingo (parallel, cached 12h)
-    summaries = tiingo.get_price_summaries_batch(top_tickers, lookback_days=60)
 
     items = []
-    for t in top_tickers:
-        s = summaries.get(t)
-        if s is None:
-            continue
+    for ticker, q in ranked:
         items.append({
-            "ticker": t,
-            "name": name_by_ticker.get(t, t),
-            "sector": sector_by_ticker.get(t) or "Other",
-            "value": float(market_caps.get(t) or 0),
-            "price": s.last_close,
-            "ret_1d": s.ret_1d_pct,
-            "ret_1w": s.ret_1w_pct,
-            "ret_1m": s.ret_1m_pct,
+            "ticker": ticker,
+            "name": name_by_ticker.get(ticker, ticker),
+            "sector": sector_by_ticker.get(ticker) or "Other",
+            "value": float(q.get("marketCap") or 0),
+            "price": q.get("price"),
+            "ret_1d": q.get("changePercentage"),
+            "ret_1w": _approx_pct(q.get("price"), q.get("priceAvg50"), days=5),
+            "ret_1m": _approx_pct(q.get("price"), q.get("priceAvg50")),
         })
 
     out = {
         "kind": "sp500",
         "top_n": top_n,
         "as_of": datetime.utcnow().date().isoformat(),
-        "source": "Tiingo (prices + market caps)",
+        "source": "FMP /sp500-constituent + /quote (batch)",
         "items": items,
     }
-    cache.put("get_sp500_heatmap_v3", params, out)
+    cache.put("get_sp500_heatmap_v4", params, out)
     return out

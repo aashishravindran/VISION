@@ -1,4 +1,4 @@
-"""Technical indicators backed by Tiingo EOD prices and the `ta` library."""
+"""Technical indicators backed by FMP EOD prices and the `ta` library."""
 import pandas as pd
 from agents import function_tool
 from ta.momentum import RSIIndicator
@@ -6,11 +6,11 @@ from ta.trend import ADXIndicator, EMAIndicator, MACD, SMAIndicator
 from ta.volatility import AverageTrueRange, BollingerBands
 
 from vision import cache
-from vision.data import tiingo
+from vision.data import fmp
 
 
 def _load_ohlc(ticker: str, lookback_days: int) -> pd.DataFrame:
-    rows = tiingo.get_price_history(ticker, lookback_days)
+    rows = fmp.historical_prices(ticker, lookback_days)
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame([
@@ -30,16 +30,30 @@ def _load_ohlc(ticker: str, lookback_days: int) -> pd.DataFrame:
 
 
 def _compute_indicators(ticker: str, lookback_days: int = 365) -> dict:
-    """Internal helper: compute indicators for a ticker. Used by both the
-    compute_indicators tool and screen_universe (which calls it per ticker)."""
+    """Internal helper used by both compute_indicators and screen_universe."""
     params = {"ticker": ticker.upper(), "lookback_days": lookback_days}
     cached = cache.get("compute_indicators", params)
     if cached is not None:
         return cached
 
-    df = _load_ohlc(ticker, lookback_days)
+    try:
+        df = _load_ohlc(ticker, lookback_days)
+    except fmp.FMPTierGatedError:
+        return {"ticker": ticker.upper(), "error": "tier_gated",
+                "error_message": (
+                    f"FMP free tier does not cover {ticker.upper()} prices, so "
+                    f"technical indicators can't be computed. Try lookup_ticker_via_web."
+                )}
+    except fmp.FMPRateLimitError as e:
+        return {"ticker": ticker.upper(), "error": "rate_limited", "error_message": str(e)}
+    except fmp.FMPNoKeyError:
+        return {"ticker": ticker.upper(), "error": "no_key",
+                "error_message": "FMP_API_KEY not set."}
+    except fmp.FMPError as e:
+        return {"ticker": ticker.upper(), "error": "fmp_error", "error_message": str(e)}
+
     if df.empty:
-        return {"ticker": ticker.upper(), "error": "No price data from Tiingo for this ticker."}
+        return {"ticker": ticker.upper(), "error": "No price data available for this ticker."}
 
     close = df["Close"].astype(float)
     high = df["High"].astype(float)
@@ -64,9 +78,9 @@ def _compute_indicators(ticker: str, lookback_days: int = 365) -> dict:
     atr_14 = AverageTrueRange(high=high, low=low, close=close, window=14).average_true_range()
     adx_14 = ADXIndicator(high=high, low=low, close=close, window=14).adx()
 
-    def f(series_or_val):
+    def f(s):
         try:
-            v = series_or_val.iloc[-1] if hasattr(series_or_val, "iloc") else series_or_val
+            v = s.iloc[-1] if hasattr(s, "iloc") else s
             return round(float(v), 4) if pd.notna(v) else None
         except (TypeError, ValueError, IndexError):
             return None
@@ -79,17 +93,11 @@ def _compute_indicators(ticker: str, lookback_days: int = 365) -> dict:
         "ticker": ticker.upper(),
         "as_of": str(df["Date"].iloc[-1].date()),
         "price": price,
-        "sma_20": f(sma_20),
-        "sma_50": sma_50_v,
-        "sma_200": sma_200_v,
+        "sma_20": f(sma_20), "sma_50": sma_50_v, "sma_200": sma_200_v,
         "ema_20": f(ema_20),
         "rsi_14": f(rsi_14),
-        "macd": f(macd_line),
-        "macd_signal": f(macd_signal),
-        "macd_hist": f(macd_hist),
-        "bb_upper": f(bb_upper),
-        "bb_middle": f(bb_middle),
-        "bb_lower": f(bb_lower),
+        "macd": f(macd_line), "macd_signal": f(macd_signal), "macd_hist": f(macd_hist),
+        "bb_upper": f(bb_upper), "bb_middle": f(bb_middle), "bb_lower": f(bb_lower),
         "atr_14": f(atr_14),
         "adx_14": f(adx_14),
         "trend": {
@@ -106,7 +114,7 @@ def _compute_indicators(ticker: str, lookback_days: int = 365) -> dict:
 
 @function_tool
 def compute_indicators(ticker: str, lookback_days: int = 365) -> dict:
-    """Compute key technical indicators for a ticker on EOD data from Tiingo.
+    """Compute key technical indicators for a ticker on EOD data from FMP.
 
     Returns the latest reading + recent trend for: SMA(20/50/200), EMA(20),
     RSI(14), MACD(12,26,9), Bollinger Bands(20,2), ATR(14), ADX(14). Also
@@ -128,12 +136,7 @@ def screen_universe(
     above_sma_200: bool | None = None,
     above_sma_50: bool | None = None,
 ) -> dict:
-    """Screen a list of tickers by technical criteria. Returns matches with
-    their indicators.
-
-    All filters are optional. The ticker list is your universe — for a sector
-    scan, first call get_sector_holdings (or the screener) to get names, then
-    pass them here.
+    """Screen a list of tickers by technical criteria.
 
     Args:
         tickers: Symbols to screen.
@@ -170,12 +173,8 @@ def screen_universe(
             "above_sma_200": ind["trend"]["above_sma_200"],
         })
     return {
-        "criteria": {
-            "rsi_max": rsi_max,
-            "rsi_min": rsi_min,
-            "above_sma_200": above_sma_200,
-            "above_sma_50": above_sma_50,
-        },
+        "criteria": {"rsi_max": rsi_max, "rsi_min": rsi_min,
+                     "above_sma_200": above_sma_200, "above_sma_50": above_sma_50},
         "n_screened": len(tickers),
         "n_matches": len(matches),
         "matches": matches,
