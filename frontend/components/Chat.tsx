@@ -1,8 +1,44 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { deleteSession, getSession, streamChat, type HistoryItem } from "@/lib/api";
+import Chart from "@/components/Chart";
 
 const SESSION_KEY = "vision_session_id";
+
+/** Split assistant message text on [chart:TICKER] markers and render an
+ * inline Chart component between segments. */
+const CHART_MARKER = /\[chart:([A-Z][A-Z0-9.-]{0,9})\]/g;
+
+function renderMessageBody(content: string): React.ReactNode[] {
+  if (!content) return [];
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  let key = 0;
+  for (const m of content.matchAll(CHART_MARKER)) {
+    const idx = m.index ?? 0;
+    if (idx > cursor) {
+      parts.push(
+        <div key={`t${key++}`} className="whitespace-pre-wrap">
+          {content.slice(cursor, idx)}
+        </div>,
+      );
+    }
+    parts.push(
+      <div key={`c${key++}`} className="my-3 -mx-1">
+        <Chart ticker={m[1]} compact height={320} initialIndicators={["sma", "rsi"]} />
+      </div>,
+    );
+    cursor = idx + m[0].length;
+  }
+  if (cursor < content.length) {
+    parts.push(
+      <div key={`t${key++}`} className="whitespace-pre-wrap">
+        {content.slice(cursor)}
+      </div>,
+    );
+  }
+  return parts;
+}
 
 type ToolStatus = "running" | "done" | "error";
 type ToolEvent = {
@@ -211,6 +247,7 @@ export default function Chat() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   // Restore session on mount — survives navigation between /chat /screener /heatmap
   useEffect(() => {
@@ -251,11 +288,17 @@ export default function Chat() {
     if (typeof window !== "undefined") localStorage.removeItem(SESSION_KEY);
   }
 
+  function stop() {
+    abortRef.current?.abort();
+  }
+
   async function send(text?: string) {
     const t = (text ?? input).trim();
     if (!t || busy) return;
     setInput("");
     setBusy(true);
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     setMessages((m) => [
       ...m,
       { role: "user", content: t, tools: [], thinking: false },
@@ -271,7 +314,7 @@ export default function Chat() {
     };
 
     try {
-      for await (const ev of streamChat(t, sessionId)) {
+      for await (const ev of streamChat(t, sessionId, ctrl.signal)) {
         if (ev.event === "session") {
           setSessionId(ev.data.session_id);
         } else if (ev.event === "token") {
@@ -326,12 +369,18 @@ export default function Chat() {
         tools: last.tools.map((t) => (t.status === "running" ? { ...t, status: "done" } : t)),
       }));
     } catch (e) {
+      const err = e as { name?: string; message?: string };
+      const aborted = err?.name === "AbortError" || ctrl.signal.aborted;
       updateLast((last) => ({
         ...last,
-        content: `[error] ${(e as Error).message}`,
+        content: aborted
+          ? (last.content || "(stopped)") + (last.content ? "\n\n*(stopped by user)*" : "")
+          : `[error] ${err?.message || String(e)}`,
         thinking: false,
+        tools: last.tools.map((t) => (t.status === "running" ? { ...t, status: "done" } : t)),
       }));
     } finally {
+      abortRef.current = null;
       setBusy(false);
     }
   }
@@ -367,7 +416,9 @@ export default function Chat() {
                   <ThinkingIndicator />
                 )}
                 {m.content && (
-                  <div className="whitespace-pre-wrap">{m.content}</div>
+                  m.role === "assistant"
+                    ? <div>{renderMessageBody(m.content)}</div>
+                    : <div className="whitespace-pre-wrap">{m.content}</div>
                 )}
               </div>
             </div>
@@ -388,13 +439,23 @@ export default function Chat() {
           disabled={busy}
           className="flex-1 bg-panel border border-border rounded-lg px-4 py-2.5 outline-none focus:border-accent text-sm"
         />
-        <button
-          onClick={() => send()}
-          disabled={busy || !input.trim()}
-          className="px-4 py-2.5 bg-accent text-bg font-semibold rounded-lg disabled:opacity-50 text-sm"
-        >
-          {busy ? "…" : "Send"}
-        </button>
+        {busy ? (
+          <button
+            onClick={stop}
+            className="px-4 py-2.5 bg-down text-white font-semibold rounded-lg text-sm hover:bg-down/90 transition-colors"
+            title="Stop the current run"
+          >
+            ◼ Stop
+          </button>
+        ) : (
+          <button
+            onClick={() => send()}
+            disabled={!input.trim()}
+            className="px-4 py-2.5 bg-accent text-bg font-semibold rounded-lg disabled:opacity-50 text-sm"
+          >
+            Send
+          </button>
+        )}
       </div>
       <div className="mt-2 flex items-center justify-between text-[11px] text-muted">
         <span className="font-mono">{sessionId ? `session: ${sessionId}` : "no active session"}</span>

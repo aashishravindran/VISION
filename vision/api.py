@@ -37,6 +37,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from vision import store
 from vision.agents import build_orchestrator
+from vision.charts import get_chart
 from vision.heatmap import get_sector_heatmap, get_sp500_heatmap
 from vision.tools.screener import _screen_stocks
 
@@ -291,6 +292,17 @@ def api_heatmap_sector():
 def api_heatmap_sp500(top_n: int = 100):
     top_n = min(max(top_n, 10), 200)
     return get_sp500_heatmap(top_n=top_n)
+
+
+# --- Chart ---
+
+@app.get("/api/chart/{ticker}")
+def api_chart(ticker: str, lookback_days: int = 365, indicators: str = "sma,ema,bb,rsi,macd"):
+    """OHLCV + indicator data for a ticker. `indicators` is a comma list:
+    sma | ema | bb | rsi | macd. Defaults to all five."""
+    lookback_days = min(max(lookback_days, 30), 365 * 5)
+    inds = [i.strip() for i in indicators.split(",") if i.strip()]
+    return get_chart(ticker.upper(), lookback_days=lookback_days, indicators=inds)
 
 
 # --- Webhooks: inbound ---

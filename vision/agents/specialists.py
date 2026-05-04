@@ -22,6 +22,7 @@ from vision.tools.prices import get_price_history, get_quote
 from vision.tools.screener import screen_stocks
 from vision.tools.sectors import get_sector_performance
 from vision.tools.stocks import get_earnings, get_fundamentals
+from vision.tools.vision import analyze_chart_visually
 from vision.tools.web import fetch_url
 
 MODEL = os.environ.get("VISION_SUB_MODEL", "gpt-5-mini")
@@ -63,10 +64,18 @@ Tools:
 - get_fundamentals — income/balance/cash flow, last 4 annual periods
 - get_earnings — historical EPS/revenue (forward dates require Tiingo paid tier)
 - compute_indicators — SMA/EMA, RSI, MACD, Bollinger, ATR, ADX
+- analyze_chart_visually — renders the chart as an image and uses a vision-capable
+  model to identify visual patterns (breakouts, H&S, divergences) that pure
+  numbers miss. Call this when the question is about the technical setup or
+  chart structure of a ticker — NOT for fundamentals-only questions. Returns
+  a `chart_marker` you should include in your `summary` so the orchestrator can
+  render the chart inline.
 
 Approach:
-- Call multiple tools IN PARALLEL when independent (quote + fundamentals + indicators in one round).
-- If you don't need all five, don't call all five — pick what answers the question.
+- Call independent tools IN PARALLEL (quote + fundamentals + indicators in one round).
+- Add `analyze_chart_visually` only when chart-pattern context matters; it adds latency.
+- When you call analyze_chart_visually, paste the returned `chart_marker` into the
+  summary text exactly as `[chart:TICKER]` on its own line — the UI renders it inline.
 - Forward earnings dates: not available on free tier, say so in `errors` if asked.
 {_SHARED_OUTPUT_RULES}"""
 
@@ -123,6 +132,7 @@ def build_stock_agent() -> Agent:
             get_fundamentals,
             get_earnings,
             compute_indicators,
+            analyze_chart_visually,
         ],
         output_type=_RESPONSE_SCHEMA,
     )

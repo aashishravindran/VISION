@@ -1,6 +1,27 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { runScreen, type ScreenFilters, type ScreenResult } from "@/lib/api";
+
+const SAVED_FILTERS_KEY = "vision_saved_screens";
+
+type SavedScreen = { name: string; filters: ScreenFilters };
+
+function loadSaved(): SavedScreen[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(SAVED_FILTERS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistSaved(saved: SavedScreen[]) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(SAVED_FILTERS_KEY, JSON.stringify(saved));
+}
 
 const SECTORS = [
   "", // any
@@ -39,9 +60,35 @@ export default function Screener() {
   const [result, setResult] = useState<ScreenResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState<SavedScreen[]>([]);
+
+  useEffect(() => {
+    setSaved(loadSaved());
+  }, []);
 
   function set<K extends keyof ScreenFilters>(k: K, v: ScreenFilters[K]) {
     setFilters((f) => ({ ...f, [k]: v }));
+  }
+
+  function saveCurrent() {
+    const name = prompt("Name this screen:");
+    if (!name?.trim()) return;
+    const next = [
+      ...saved.filter((s) => s.name !== name.trim()),
+      { name: name.trim(), filters: { ...filters } },
+    ];
+    setSaved(next);
+    persistSaved(next);
+  }
+
+  function applySaved(s: SavedScreen) {
+    setFilters({ ...s.filters });
+  }
+
+  function deleteSaved(name: string) {
+    const next = saved.filter((s) => s.name !== name);
+    setSaved(next);
+    persistSaved(next);
   }
 
   async function run() {
@@ -59,7 +106,42 @@ export default function Screener() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold">Stock screener</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Stock screener</h1>
+        <button
+          onClick={saveCurrent}
+          className="text-xs text-muted hover:text-accent transition-colors"
+          title="Save current filter set to your browser"
+        >
+          + Save current filters
+        </button>
+      </div>
+
+      {saved.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {saved.map((s) => (
+            <div
+              key={s.name}
+              className="group flex items-center gap-1 text-xs bg-panel border border-border rounded-full px-3 py-1 hover:border-accent/40 transition-colors"
+            >
+              <button
+                onClick={() => applySaved(s)}
+                className="hover:text-accent"
+                title="Apply this saved screen"
+              >
+                {s.name}
+              </button>
+              <button
+                onClick={() => deleteSaved(s.name)}
+                className="text-muted/50 hover:text-down opacity-0 group-hover:opacity-100 transition-opacity ml-1"
+                title="Delete"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-panel border border-border rounded-lg p-4">
         <Field label="Universe">

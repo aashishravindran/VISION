@@ -6,6 +6,7 @@ specialists own the data."""
 import os
 
 from agents import Agent
+from agents.model_settings import ModelSettings
 
 from vision.agents.specialists import (
     build_news_agent,
@@ -16,6 +17,10 @@ from vision.agents.specialists import (
 from vision.agents.sub_tool import make_specialist_tool
 
 MODEL = os.environ.get("VISION_MODEL", "gpt-5")
+# Orchestrator's job is mostly synthesis after specialists return. "medium"
+# effort halves reasoning latency vs. the default "high" with negligible
+# quality drop on synthesis tasks.
+ORCH_EFFORT = os.environ.get("VISION_ORCH_EFFORT", "medium")
 SUB_MAX_TURNS = int(os.environ.get("VISION_SUB_MAX_TURNS", "25"))
 
 ORCHESTRATOR_INSTRUCTIONS = """You are VISION — Verified Intelligence on Sectors, Instruments, Opportunities & Narratives.
@@ -75,6 +80,20 @@ Each specialist returns a JSON object with this shape:
 - Quote specific numbers; never recall or estimate prices.
 - End forward-looking questions with a "What to watch" section.
 
+## Chart markers
+
+When your answer focuses on the technical setup of a specific ticker, include
+exactly one `[chart:TICKER]` marker on its own line near the relevant section.
+Examples:
+- "Analyze NVDA" → put `[chart:NVDA]` right after the technicals paragraph.
+- "Compare NVDA vs AMD" → up to TWO markers: `[chart:NVDA]` and `[chart:AMD]`.
+- Sector / news / screener answers → NO chart marker (charts are per-ticker).
+- General market commentary → NO chart marker.
+
+Maximum 2 chart markers per answer. The frontend turns these into interactive
+candlestick charts inline. The marker must be on its own line, format strictly
+`[chart:TICKER]` with the ticker in uppercase.
+
 ## Boundaries
 
 - EOD data only (Tiingo). If the user asks intraday, say so and proceed with EOD.
@@ -92,6 +111,7 @@ def build_orchestrator() -> Agent:
         name="VISION",
         instructions=ORCHESTRATOR_INSTRUCTIONS,
         model=MODEL,
+        model_settings=ModelSettings(reasoning={"effort": ORCH_EFFORT}),
         tools=[
             make_specialist_tool(
                 sector,

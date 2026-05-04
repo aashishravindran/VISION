@@ -168,6 +168,42 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await fetch(`${API_BASE}/api/sessions/${sessionId}`, { method: "DELETE" });
 }
 
+export type ChartData = {
+  ticker: string;
+  as_of: string;
+  n: number;
+  dates: string[];
+  open: (number | null)[];
+  high: (number | null)[];
+  low: (number | null)[];
+  close: (number | null)[];
+  volume: (number | null)[];
+  overlays: Record<string, (number | null)[]>;
+  subpanels: Record<string, (number | null)[]>;
+  summary: {
+    price: number;
+    rsi_14: number | null;
+    above_sma_50: boolean;
+    above_sma_200: boolean;
+    golden_cross: boolean;
+  };
+  error?: string;
+};
+
+export async function getChart(
+  ticker: string,
+  lookbackDays = 365,
+  indicators: string[] = ["sma", "ema", "bb", "rsi", "macd"],
+): Promise<ChartData> {
+  const qs = new URLSearchParams({
+    lookback_days: String(lookbackDays),
+    indicators: indicators.join(","),
+  });
+  const res = await fetch(`${API_BASE}/api/chart/${encodeURIComponent(ticker)}?${qs}`);
+  if (!res.ok) throw new Error(`chart fetch failed: ${res.status}`);
+  return res.json();
+}
+
 export async function getHeatmap(kind: "sector" | "sp500", topN = 100): Promise<Heatmap> {
   const url =
     kind === "sector"
