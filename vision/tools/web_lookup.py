@@ -132,3 +132,107 @@ def lookup_ticker_via_web(ticker: str) -> dict:
         return parsed
 
     return {"ticker": ticker.upper(), "raw_findings": raw[:2000]}
+
+
+NEWS_PROMPT = """You are a finance news researcher. Find recent news (last 30 days) about: {query}
+
+Use web_search to pull articles from authoritative sources (Reuters, Bloomberg,
+WSJ, FT, MarketWatch, CNBC, official IR pages). Cite the source URL for every
+article you reference.
+
+Return a concise JSON object with these keys (use null/empty list when nothing fits):
+{{
+  "query": "...",
+  "narrative": "...",     // 2-4 sentence summary of what's actually moving the story
+  "themes": ["..."],      // 2-5 short bullets on the key themes / drivers
+  "articles": [           // 4-8 articles ranked by relevance
+    {{
+      "title": "...",
+      "url": "...",
+      "source": "...",
+      "published": "YYYY-MM-DD",
+      "summary": "..."    // 1-2 sentences on what this article specifically says
+    }}
+  ],
+  "notes": "..."          // any caveats about coverage gaps or unverified facts
+}}
+
+Output ONLY the JSON object — no preamble, no markdown fences."""
+
+
+def _call_news_responses_api(query: str) -> str:
+    client = OpenAI()
+    response = client.responses.create(
+        model=WEB_LOOKUP_MODEL,
+        tools=[{"type": "web_search"}],
+        input=[{
+            "role": "user",
+            "content": [{"type": "input_text", "text": NEWS_PROMPT.format(query=query)}],
+        }],
+    )
+    out = ""
+    for item in (getattr(response, "output", None) or []):
+        if getattr(item, "type", None) != "message":
+            continue
+        for c in (getattr(item, "content", None) or []):
+            if getattr(c, "type", None) == "output_text":
+                out += getattr(c, "text", "") or ""
+    if not out:
+        out = (getattr(response, "output_text", "") or "").strip()
+    return out
+
+
+@function_tool
+def lookup_news_via_web(query: str) -> dict:
+    """Look up recent news via web_search when GDELT can't fulfill the request.
+
+    USE THIS WHEN: search_news returned `error: "rate_limited"` /
+    `"timeout"` / `"network_error"` / `"gdelt_error"` — that means GDELT
+    couldn't serve the request. This tool uses GPT-5-mini + web_search to
+    pull authoritative articles directly.
+
+    DO NOT USE WHEN: search_news worked — that data is cached and free.
+    Only use this as a fallback or when GDELT's coverage is known thin
+    (very small companies, breaking events <1h old).
+
+    Returns structured news with citation URLs sourced from Reuters /
+    Bloomberg / WSJ / FT / MarketWatch / CNBC / company IR.
+
+    Args:
+        query: Search query — ticker name, theme, or event ("KTOS contract
+            awards", "AI capex 2026", "Fed rate decision").
+    """
+    cache_key = {"query": query}
+    cached = cache.get("web_lookup_news", cache_key, ttl_hours=6)
+    if cached is not None:
+        return cached
+
+    try:
+        raw = _call_news_responses_api(query)
+    except Exception as e:
+        return {"query": query, "error": "web_lookup_failed", "error_message": str(e)}
+
+    if not raw:
+        return {"query": query, "error": "web_lookup_empty",
+                "error_message": "Web news lookup returned no output."}
+
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[-1]
+        if cleaned.endswith("```"):
+            cleaned = cleaned.rsplit("```", 1)[0]
+    try:
+        parsed = json.loads(cleaned)
+    except Exception:
+        out = {"query": query, "raw_findings": raw[:2500],
+               "parse_warning": "Web news lookup returned non-JSON; surfacing raw text."}
+        cache.put("web_lookup_news", cache_key, out)
+        return out
+
+    if isinstance(parsed, dict):
+        parsed.setdefault("query", query)
+        parsed["_source"] = "web_search"
+        cache.put("web_lookup_news", cache_key, parsed)
+        return parsed
+
+    return {"query": query, "raw_findings": raw[:2500]}

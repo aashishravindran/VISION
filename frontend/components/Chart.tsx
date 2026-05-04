@@ -68,22 +68,44 @@ export default function Chart({
 
   // Build Plotly traces
   const traces: Record<string, unknown>[] = [];
-  let priceDomain = [0.0, 1.0]; // y-axis domain on the price subplot
-  let yAxes: Record<string, Record<string, unknown>> = {
+  let priceDomain: [number, number] = [0.0, 1.0]; // y-axis domain on the price subplot
+  const yAxes: Record<string, Record<string, unknown>> = {
     yaxis: { title: { text: "Price" }, gridcolor: "#222632" },
   };
-  let nSubpanels = 0;
+  // Map of subpanel key → which yaxis number it lives on (yaxis2/yaxis3...)
+  const subpanelAxis: Record<"rsi" | "macd", string> = { rsi: "y", macd: "y" };
 
   if (data) {
-    const hasRsi = active.has("rsi") && data.subpanels.rsi_14;
-    const hasMacd = active.has("macd") && data.subpanels.macd;
-    nSubpanels = (hasRsi ? 1 : 0) + (hasMacd ? 1 : 0);
+    const hasRsi = !!(active.has("rsi") && data.subpanels.rsi_14);
+    const hasMacd = !!(active.has("macd") && data.subpanels.macd);
 
-    // Layout subpanels by domain stacking
-    const subPanelHeight = 0.18;
+    // Layout: stack subpanels from y=0 upward; price gets everything above.
+    // Order from bottom-up: MACD (if any) → RSI (if any) → price.
+    // This way RSI sits adjacent to price, which is the conventional view.
+    const subH = 0.18;
     const gap = 0.04;
-    const totalSub = nSubpanels * subPanelHeight + Math.max(0, nSubpanels - 1) * gap;
-    priceDomain = [Math.min(0.45, totalSub + (nSubpanels > 0 ? gap : 0)), 1.0];
+    const stack: ("macd" | "rsi")[] = [];
+    if (hasMacd) stack.push("macd");
+    if (hasRsi) stack.push("rsi");
+
+    // Assign each subpanel a y-axis index starting from 2 (yaxis = price)
+    stack.forEach((key, idx) => {
+      const start = idx * (subH + gap);
+      const end = start + subH;
+      const axisNum = idx + 2; // yaxis2, yaxis3, ...
+      const axisKey = `yaxis${axisNum}`;
+      subpanelAxis[key] = `y${axisNum}`;
+      yAxes[axisKey] = {
+        title: { text: key === "rsi" ? "RSI(14)" : "MACD" },
+        domain: [start, end],
+        gridcolor: "#222632",
+        ...(key === "rsi" ? { range: [0, 100] } : {}),
+      };
+    });
+
+    // Price gets everything above the last subpanel + a small gap.
+    const priceStart = stack.length > 0 ? stack.length * (subH + gap) : 0.0;
+    priceDomain = [priceStart, 1.0];
 
     // Candlesticks
     traces.push({
@@ -154,21 +176,9 @@ export default function Chart({
       }
     }
 
-    // Subpanels
-    let panelIdx = 1;
+    // RSI subpanel traces
     if (hasRsi) {
-      panelIdx += 1;
-      const dom = [
-        priceDomain[0] - panelIdx * (subPanelHeight + gap) + gap,
-        priceDomain[0] - (panelIdx - 1) * (subPanelHeight + gap) - gap,
-      ];
-      const yKey = `yaxis${panelIdx}`;
-      yAxes[yKey] = {
-        title: { text: "RSI(14)" },
-        domain: [Math.max(0, dom[0]), Math.max(0, dom[1])],
-        range: [0, 100],
-        gridcolor: "#222632",
-      };
+      const yref = subpanelAxis.rsi;
       traces.push({
         type: "scatter",
         mode: "lines",
@@ -177,7 +187,7 @@ export default function Chart({
         name: "RSI 14",
         line: { color: "#a78bfa", width: 1.5 },
         xaxis: "x",
-        yaxis: `y${panelIdx}`,
+        yaxis: yref,
       });
       // 30/70 reference lines
       traces.push({
@@ -188,7 +198,7 @@ export default function Chart({
         showlegend: false,
         line: { color: "#ef4444", width: 1, dash: "dash" },
         xaxis: "x",
-        yaxis: `y${panelIdx}`,
+        yaxis: yref,
       });
       traces.push({
         type: "scatter",
@@ -198,21 +208,13 @@ export default function Chart({
         showlegend: false,
         line: { color: "#10b981", width: 1, dash: "dash" },
         xaxis: "x",
-        yaxis: `y${panelIdx}`,
+        yaxis: yref,
       });
     }
+
+    // MACD subpanel traces
     if (hasMacd) {
-      panelIdx += 1;
-      const dom = [
-        priceDomain[0] - panelIdx * (subPanelHeight + gap) + gap,
-        priceDomain[0] - (panelIdx - 1) * (subPanelHeight + gap) - gap,
-      ];
-      const yKey = `yaxis${panelIdx}`;
-      yAxes[yKey] = {
-        title: { text: "MACD" },
-        domain: [Math.max(0, dom[0]), Math.max(0, dom[1])],
-        gridcolor: "#222632",
-      };
+      const yref = subpanelAxis.macd;
       traces.push({
         type: "bar",
         x: data.dates,
@@ -220,7 +222,7 @@ export default function Chart({
         name: "MACD hist",
         marker: { color: "rgba(122,162,247,0.5)" },
         xaxis: "x",
-        yaxis: `y${panelIdx}`,
+        yaxis: yref,
       });
       traces.push({
         type: "scatter",
@@ -230,7 +232,7 @@ export default function Chart({
         name: "MACD",
         line: { color: "#7aa2f7", width: 1.5 },
         xaxis: "x",
-        yaxis: `y${panelIdx}`,
+        yaxis: yref,
       });
       traces.push({
         type: "scatter",
@@ -240,11 +242,11 @@ export default function Chart({
         name: "Signal",
         line: { color: "#f59e0b", width: 1.5 },
         xaxis: "x",
-        yaxis: `y${panelIdx}`,
+        yaxis: yref,
       });
     }
 
-    // Update price y-axis domain
+    // Apply price y-axis domain (assigned now that we know stack length)
     yAxes.yaxis = {
       ...yAxes.yaxis,
       domain: priceDomain,

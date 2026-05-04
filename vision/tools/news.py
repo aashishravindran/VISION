@@ -22,7 +22,9 @@ def search_news(query: str, days: int = 7, max_results: int = 25) -> dict:
         max_results: Cap on articles. Default 25; max 100.
     """
     params = {"query": query, "days": days, "max_results": min(max_results, 100)}
-    cached = cache.get("search_news", params, ttl_hours=2)
+    # Bumped TTL 2h → 4h: news themes don't change that fast and re-running
+    # the same query repeatedly is the typical pattern.
+    cached = cache.get("search_news", params, ttl_hours=4)
     if cached is not None:
         return cached
 
@@ -40,10 +42,41 @@ def search_news(query: str, days: int = 7, max_results: int = 25) -> dict:
 
     try:
         resp = httpx.get(GDELT_DOC_API, params=api_params, timeout=20.0)
-        resp.raise_for_status()
-        data = resp.json()
+    except httpx.TimeoutException:
+        return {
+            "query": query, "error": "timeout", "articles": [],
+            "error_message": "GDELT timed out. Try lookup_news_via_web for this query.",
+        }
     except Exception as e:
-        return {"query": query, "error": f"GDELT request failed: {e}", "articles": []}
+        return {
+            "query": query, "error": "network_error", "articles": [],
+            "error_message": f"GDELT request failed: {e}. Try lookup_news_via_web.",
+        }
+
+    if resp.status_code == 429 or (
+        resp.status_code in (403, 503) and "rate" in resp.text.lower()
+    ):
+        return {
+            "query": query, "error": "rate_limited", "articles": [],
+            "error_message": (
+                "GDELT throttled this request. Try lookup_news_via_web for the same query — "
+                "it uses GPT-5-mini + web_search and works when GDELT is rate-limiting."
+            ),
+        }
+    if resp.status_code != 200:
+        return {
+            "query": query, "error": "gdelt_error", "articles": [],
+            "error_message": f"GDELT returned {resp.status_code}. Try lookup_news_via_web.",
+        }
+
+    try:
+        data = resp.json()
+    except Exception:
+        # GDELT sometimes returns HTML on errors. Treat as transient.
+        return {
+            "query": query, "error": "parse_error", "articles": [],
+            "error_message": "GDELT returned non-JSON. Try lookup_news_via_web.",
+        }
 
     articles = []
     for art in data.get("articles", []):
