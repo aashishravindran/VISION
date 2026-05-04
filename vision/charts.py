@@ -15,6 +15,7 @@ from ta.volatility import BollingerBands
 
 from vision import cache
 from vision.data import tiingo
+from vision.data.tiingo import TiingoRateLimitError, TiingoTierLimitError
 
 
 def _to_series_floats(s: pd.Series) -> list[float | None]:
@@ -63,13 +64,33 @@ def get_chart(ticker: str, lookback_days: int = 365, indicators: list[str] | Non
     """
     requested = set(indicators) if indicators else {"sma", "ema", "bb", "rsi", "macd"}
     cache_params = {"ticker": ticker.upper(), "lookback_days": lookback_days, "ind": sorted(requested)}
-    cached = cache.get("get_chart", cache_params, ttl_hours=12)
+    cached = cache.get("get_chart", cache_params, ttl_hours=24)
     if cached is not None:
         return cached
 
-    rows = tiingo.get_price_history(ticker, lookback_days)
+    # Use the raw fetcher so we can distinguish "no data" from "rate-limited".
+    try:
+        rows = tiingo._fetch_prices(ticker, lookback_days) or []
+        rate_limited = False
+    except TiingoRateLimitError:
+        rows = []
+        rate_limited = True
+    except TiingoTierLimitError as e:
+        return {"ticker": ticker.upper(), "error": "tier_limited", "error_message": str(e)}
+    except Exception as e:
+        return {"ticker": ticker.upper(), "error": "fetch_failed", "error_message": str(e)}
+
     if not rows:
-        return {"ticker": ticker.upper(), "error": "No price data from Tiingo for this ticker."}
+        if rate_limited:
+            return {
+                "ticker": ticker.upper(),
+                "error": "rate_limited",
+                "error_message": (
+                    "Tiingo daily request limit reached. Resets at 00:00 UTC. "
+                    "Cached charts you've viewed today still load."
+                ),
+            }
+        return {"ticker": ticker.upper(), "error": "no_data", "error_message": "No price data from Tiingo for this ticker."}
 
     df = pd.DataFrame([
         {

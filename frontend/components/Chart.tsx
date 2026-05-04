@@ -43,8 +43,12 @@ export default function Chart({
     getChart(ticker, lookbackDays, Array.from(active))
       .then((d) => {
         if (cancelled) return;
-        if (d.error) setErr(d.error);
-        else setData(d);
+        if (d.error) {
+          setErr(d.error_message || d.error);
+          setData(null);
+        } else {
+          setData(d);
+        }
       })
       .catch((e) => !cancelled && setErr(e.message))
       .finally(() => !cancelled && setLoading(false));
@@ -282,7 +286,11 @@ export default function Chart({
         </div>
       )}
 
-      {err && <div className="text-down text-sm py-2">Error: {err}</div>}
+      {err && (
+        <div className="text-sm py-3 px-4 rounded border border-down/30 bg-down/5 text-down/90">
+          ⚠ {err}
+        </div>
+      )}
       {loading && !data && <div className="text-muted text-sm py-2">Loading…</div>}
 
       {data && (

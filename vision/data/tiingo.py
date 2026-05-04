@@ -175,7 +175,7 @@ def _fetch_prices(ticker: str, lookback_days: int) -> list[dict] | None:
     end = datetime.utcnow().date()
     start = end - timedelta(days=lookback_days + 10)
     params = {"ticker": ticker.upper(), "lookback_days": lookback_days}
-    cached = cache.get("tiingo_prices", params, ttl_hours=12)
+    cached = cache.get("tiingo_prices", params, ttl_hours=24)
     if cached is not None:
         return cached
     try:
@@ -289,8 +289,15 @@ def get_meta(ticker: str) -> dict[str, Any] | None:
 
 def get_price_history(ticker: str, lookback_days: int = 365) -> list[dict]:
     """Full price history as a list of {date, open, high, low, close, volume,
-    adjClose, ...} rows. Wraps `_fetch_prices` for tools that need raw data."""
-    return _fetch_prices(ticker, lookback_days) or []
+    adjClose, ...} rows. Wraps `_fetch_prices` for tools that need raw data.
+
+    Returns [] on rate-limit / network failures — callers (chart endpoint,
+    indicators, screener) should detect the empty list and surface a helpful
+    error to the user rather than crashing."""
+    try:
+        return _fetch_prices(ticker, lookback_days) or []
+    except TiingoError:
+        return []
 
 
 def get_statements(ticker: str) -> dict[str, Any] | None:

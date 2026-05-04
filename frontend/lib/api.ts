@@ -170,24 +170,25 @@ export async function deleteSession(sessionId: string): Promise<void> {
 
 export type ChartData = {
   ticker: string;
-  as_of: string;
-  n: number;
-  dates: string[];
-  open: (number | null)[];
-  high: (number | null)[];
-  low: (number | null)[];
-  close: (number | null)[];
-  volume: (number | null)[];
-  overlays: Record<string, (number | null)[]>;
-  subpanels: Record<string, (number | null)[]>;
-  summary: {
+  as_of?: string;
+  n?: number;
+  dates?: string[];
+  open?: (number | null)[];
+  high?: (number | null)[];
+  low?: (number | null)[];
+  close?: (number | null)[];
+  volume?: (number | null)[];
+  overlays?: Record<string, (number | null)[]>;
+  subpanels?: Record<string, (number | null)[]>;
+  summary?: {
     price: number;
     rsi_14: number | null;
     above_sma_50: boolean;
     above_sma_200: boolean;
     golden_cross: boolean;
   };
-  error?: string;
+  error?: "rate_limited" | "tier_limited" | "no_data" | "fetch_failed" | string;
+  error_message?: string;
 };
 
 export async function getChart(

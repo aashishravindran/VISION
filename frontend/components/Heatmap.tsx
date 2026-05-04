@@ -22,11 +22,18 @@ export default function Heatmap() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Sector heatmap is cheap (11 ETFs) — auto-load. S&P 500 is expensive
+  // (~600 Tiingo requests cold) — require explicit click to avoid burning
+  // through the daily quota on incidental page loads.
   useEffect(() => {
+    if (kind === "sp500") {
+      setData(null);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);
-    getHeatmap(kind, topN)
+    getHeatmap("sector")
       .then((d) => {
         if (!cancelled) setData(d);
       })
@@ -39,7 +46,16 @@ export default function Heatmap() {
     return () => {
       cancelled = true;
     };
-  }, [kind, topN]);
+  }, [kind]);
+
+  function loadSp500() {
+    setLoading(true);
+    setError(null);
+    getHeatmap("sp500", topN)
+      .then((d) => setData(d))
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }
 
   const items = data?.items ?? [];
   const tickerLabels = items.map((i) => i.ticker);
@@ -82,16 +98,25 @@ export default function Heatmap() {
           <option value="sp500">S&P 500 (top by market cap)</option>
         </select>
         {kind === "sp500" && (
-          <select
-            value={topN}
-            onChange={(e) => setTopN(Number(e.target.value))}
-            className="bg-panel border border-border rounded px-3 py-1.5"
-          >
-            <option value={50}>Top 50</option>
-            <option value={100}>Top 100</option>
-            <option value={150}>Top 150</option>
-            <option value={200}>Top 200</option>
-          </select>
+          <>
+            <select
+              value={topN}
+              onChange={(e) => setTopN(Number(e.target.value))}
+              className="bg-panel border border-border rounded px-3 py-1.5"
+            >
+              <option value={50}>Top 50</option>
+              <option value={100}>Top 100</option>
+              <option value={150}>Top 150</option>
+              <option value={200}>Top 200</option>
+            </select>
+            <button
+              onClick={loadSp500}
+              disabled={loading}
+              className="px-3 py-1.5 bg-accent text-bg font-semibold rounded text-sm disabled:opacity-50"
+            >
+              {data?.kind === "sp500" ? "Reload" : "Load"}
+            </button>
+          </>
         )}
         <select
           value={metric}
@@ -107,6 +132,12 @@ export default function Heatmap() {
 
       {error && <div className="text-down text-sm">Error: {error}</div>}
       {loading && <div className="text-muted text-sm">Loading… (S&amp;P 500 first run can take ~60s while market caps cache)</div>}
+      {!loading && kind === "sp500" && !data && (
+        <div className="text-muted text-sm py-3 px-4 rounded border border-border bg-panel">
+          S&amp;P 500 heat map fetches ~600 Tiingo prices/market-caps on a cold cache.
+          Click <strong>Load</strong> to fetch — re-runs within 4h are instant from cache.
+        </div>
+      )}
 
       {!loading && data && (
         <Plot
